@@ -48,28 +48,66 @@ class FS:
                 'len': 0,
                 'buf': bytearray(BLOCK_SIZE),
                 'buf_i': -1,
-                'dirty': False
+                'not_flushed': False
             })
+        
+        self.init()
+    
+    #--- File System Methods ---#
 
     def init(self):
         '''Re-initialize the file system'''
         self.disk = EmulatedDisk(self.b)
         self.format_fs()
 
-        self.I = bytearray(BLOCK_SIZE)
-        self.O = bytearray(BLOCK_SIZE)
-        self.M = bytearray(BLOCK_SIZE)
+        #Reset buffers
+        self.I[:] = b'\x00' * BLOCK_SIZE
+        self.O[:] = b'\x00' * BLOCK_SIZE
+        self.M[:] = b'\x00' * BLOCK_SIZE
 
+        #Reset OFT
         self.OFT = []
-        for _ in range(self.N):
-            self.OFT.append({
-                'desc': -1,
-                'pos': -1,
-                'len': 0,
-                'buf': bytearray(BLOCK_SIZE),
-                'buf_i': -1,
-                'dirty': False
-            })
+        for i in range(self.N):
+            self.OFT[i]['buf'][:] = b'\x00' * BLOCK_SIZE
+            self.OFT[i]['pos'] = -1
+            self.OFT[i]['len'] = 0
+            self.OFT[i]['buf_i'] = -1
+            self.OFT[i]['not_flushed'] = False
+
+        #Reset bitmap
+        for b in range(0, self.k + 1):
+            self._bitmap_set(b, 1)
+        for b in range(self.k + 1, self.B):
+            self._bitmap_set(b, 0)
+
+        #Initialize descriptors
+        for i in range(self.d):
+            self._write_desc(i, -1, -1, -1, -1)
+
+        #Set directory descriptor
+        self._write_desc(0, 0, self.k, -1, -1)
+
+        #Zero directory block
+        self.O[:] = b'\x00' * BLOCK_SIZE
+        self.disk.write_block(self.k, self.O)
+
+        #Open directory in OFT[0]
+        self.OFT[0]['desc'] = 0
+        self.OFT[0]['pos'] = 0
+        self.OFT[0]['len'] = 0
+        self.OFT[0]['buf_i'] = 0
+        self.OFT[0]['not_flushed'] = False
+
+        #Load directory block into OFT[0] buffer
+        self.disk.read_block(self.k, self.OFT[0]['buf'])
+        self.OFT[0]['buf'][:] = self.I[:]
+
+    def format_fs(self):
+        '''Format the file system'''
+        #Initialize all blocks to zero
+        zero_block = bytearray(BLOCK_SIZE)
+        for b in range(self.b):
+            self.disk.write_block(b, zero_block)
 
     #--- Helper Methods ---#
 
@@ -144,5 +182,65 @@ class FS:
         self._set_int(self.O, offset + 8, b1)
         self._set_int(self.O, offset + 12, b2)
         self.disk.write_block(block, self.O)
+
+    # File name helper methods
+
+    def _pack_name(self, name: str) -> bytearray:
+        '''Pack a filename into a 16-byte bytearray'''
+        name_bytes = name.encode('ascii')
+        if len(name_bytes) > 4:
+            raise ValueError("Filename too long")
+        return name_bytes.ljust(4, b'\x00')
+    
+    def _unpack_name(self, name_bytes: bytearray) -> str:
+        '''Unpack a filename from a 16-byte bytearray'''
+        return name_bytes.split(b'\x00', 1)[0].decode('ascii')
+    
+    # Directory entry helper methods
+
+    def _dir_entry_count(self) -> int:
+        '''Count the number of directory entries in a directory OFT entry'''
+        size, _, _, _ = self._read_desc(0)
+        return size // 8
+    
+    def _dir_read_entry(self, i: int) -> tuple[str, int]:
+        '''Read a directory entry by index'''
+        if i < 0 or i >= self._dir_entry_count():
+            raise IndexError("Directory entry index out of bounds")
+
+        off = i * 8
+        name = self._unpack_name(self._read_file_by_desc(0, off, 8)[0:4])
+        di = struct.unpack(INT_FMT, self._read_file_by_desc(0, off, 8))[0]
+        return name, di
+    
+    def _dir_write_entry(self, i: int, name: bytes, di: int):
+        '''Write a directory entry by index'''
+        off = i * 8
+        data = name + struct.pack(INT_FMT, di)
+        self._write_file_by_desc(0, off, data)
+
+    def _dir_add(self, name: str, di: int):
+        '''Add a directory entry'''
+        packed_name = self._pack_name(name)
+        n = self._dir_entry_count()
+        
+        for i in range(n):
+            entry_name, _ = self._dir_read_entry(i)
+            if entry_name == name:
+                raise ValueError("File already exists")
+            elif entry_name == '':
+                self._dir_write_entry(i, packed_name, di)
+                return
+        self._dir_write_entry(n, packed_name, di)
+
+    def _dir_remove(self, name: str):
+        '''Remove a directory entry'''
+        n = self._dir_entry_count()
+        for i in range(n):
+            entry_name, _ = self._dir_read_entry(i)
+            if entry_name == name:
+                self._dir_write_entry(i, b'\x00' * 4, -1)
+                return
+        raise ValueError("File not found")
 
     
