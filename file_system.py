@@ -73,6 +73,7 @@ class FS:
             self.OFT[i]['len'] = 0
             self.OFT[i]['buf_i'] = -1
             self.OFT[i]['not_flushed'] = False
+            self.OFT[i]['desc'] = -1
 
         #Reset bitmap
         for b in range(0, self.k + 1):
@@ -108,6 +109,185 @@ class FS:
         zero_block = bytearray(BLOCK_SIZE)
         for b in range(self.b):
             self.disk.write_block(b, zero_block)
+
+    def create(self, name: str):
+        '''Create a new file with the given name'''
+        if self._dir_find(name) != -1:
+            raise ValueError("File already exists")
+        if len(name) > 4:
+            raise ValueError("Filename too long")
+
+        #Check if file already exists
+        free = -1
+        for j in range(1, self.d):
+            sz, _, _, _ = self._read_desc(j)
+            if sz == -1:
+                free = j
+                break
+        if free == -1:
+            raise RuntimeError("no free descriptor")
+        
+        self._write_desc(free, 0, -1, -1, -1)
+        self._dir_add(name, free)
+
+    def destroy(self, name: str):
+        di = self._dir_find(name)
+        if di == -1:
+            raise ValueError("File not found")
+        
+        for i in range(1, self.N):
+            if self.OFT[i]['pos'] != -1 and self.OFT[i]['desc'] == di:
+                raise RuntimeError("file is open")
+        
+        size, b0, b1, b2 = self._read_desc(di)
+        for b in [b0, b1, b2]:
+            if b != -1:
+                self._free_block(b)
+
+        self._write_desc(di, -1, -1, -1, -1)
+        self._dir_remove(name)
+
+    def open(self, name: str) -> int:
+        di = self._dir_find(name)
+        if di == -1:
+            raise ValueError("File not found")
+        
+        for i in range(1, self.N):
+            if self.OFT[i]['pos'] != -1 and self.OFT[i]['desc'] == di:
+                return i
+        
+        for i in range(1, self.N):
+            if self.OFT[i]['pos'] == -1:
+                self.OFT[i]['desc'] = di
+                self.OFT[i]['pos'] = 0
+                size, b0, b1, b2 = self._read_desc(di)
+                self.OFT[i]['len'] = size
+                self.OFT[i]['buf_i'] = 0
+                self.OFT[i]['not_flushed'] = False
+
+                block_num = b0 if b0 != -1 else -1
+                if block_num != -1:
+                    self.disk.read_block(block_num, self.OFT[i]['buf'])
+                else:
+                    self.OFT[i]['buf'][:] = b'\x00' * BLOCK_SIZE
+
+                return i
+        
+        raise RuntimeError("no free OFT entry")
+    
+    def close(self, i: int):
+        '''Close the file associated with the given OFT index'''
+        if i < 0 or i >= self.N:
+            raise IndexError("OFT index out of bounds")
+        if self.OFT[i]['pos'] == -1:
+            raise RuntimeError("OFT entry not in use")
+        
+        self._flush_oft(i)
+        self.OFT[i]['desc'] = -1
+        self.OFT[i]['pos'] = -1
+        self.OFT[i]['len'] = 0
+        self.OFT[i]['buf_i'] = -1
+        self.OFT[i]['not_flushed'] = False
+        self.OFT[i]['cur'] = -1
+
+    def read(self, i: int, m: int, n: int) -> bytes:
+        '''Read n bytes from the file associated with the given OFT index'''
+        if i < 0 or i >= self.N:
+            raise IndexError("OFT index out of bounds")
+        if self.OFT[i]['pos'] == -1:
+            raise RuntimeError("OFT entry not in use")
+        
+        di = self.OFT[i]['desc']
+        off = self.OFT[i]['pos']
+        size = self.OFT[i]['len']
+        if off >= size:
+            return 0
+        
+        m = min(n, size - off)
+        read_count = 0
+
+        while n > 0:
+            block_index = off // BLOCK_SIZE
+            block_offset = off % BLOCK_SIZE
+
+            if self.OFT[i]['buf_i'] != block_index:
+                self._load_oft_block(i, block_index)
+
+            to_read = min(n, BLOCK_SIZE - block_offset)
+            self.M[m:m+to_read] = self.OFT[i]['buf'][block_offset:block_offset + to_read]
+
+            m += to_read
+            off += to_read
+            n -= to_read
+            read_count += to_read
+
+        self.OFT[i]['pos'] += off
+        return read_count
+    
+    def write(self, i: int, m: int, n: int):
+        '''Write n bytes to the file associated with the given OFT index'''
+        if i < 0 or i >= self.N:
+            raise IndexError("OFT index out of bounds")
+        if self.OFT[i]['pos'] == -1:
+            raise RuntimeError("OFT entry not in use")
+        
+        di = self.OFT[i]['desc']
+        off = self.OFT[i]['pos']
+        written_count = 0
+
+        while n > 0:
+            block_index = off // BLOCK_SIZE
+            block_offset = off % BLOCK_SIZE
+
+            if block_index >= 3:
+                raise RuntimeError("File size limit exceeded")
+
+            if self.OFT[i]['buf_i'] != block_index:
+                self._load_oft_block(i, block_index)
+
+            size, ptrs = self._get_block_ptr(di)
+            if ptrs[block_index] == -1:
+                ptrs[block_index] = self._alloc_block()
+                self._write_desc(di, size, ptrs[0], ptrs[1], ptrs[2])
+
+            to_write = min(n, BLOCK_SIZE - block_offset)
+            self.OFT[i]['buf'][block_offset:block_offset + to_write] = self.M[m:m + to_write]
+            self.OFT[i]['not_flushed'] = True
+
+            m += to_write
+            off += to_write
+            n -= to_write
+            written_count += to_write
+            self.OFT[i]['len'] = max(self.OFT[i]['len'], self.OFT[i]['pos'])
+
+        self.OFT[i]['pos'] += off
+        return written_count
+    
+    def seek(self, i: int, pos: int):
+        '''Seek to a position in the file associated with the given OFT index'''
+        if i < 0 or i >= self.N:
+            raise IndexError("OFT index out of bounds")
+        if self.OFT[i]['pos'] == -1:
+            raise RuntimeError("OFT entry not in use")
+        if pos < 0 or pos > self.OFT[i]['len']:
+            raise ValueError("Seek position out of bounds")
+        
+        old_index = self.OFT[i]['pos'] // BLOCK_SIZE
+        block_index = pos // BLOCK_SIZE
+        if block_index != old_index:
+            self._load_oft_block(i, block_index)
+        
+        self.OFT[i]['pos'] = pos
+    
+    def directory(self) -> list[tuple[str, int]]:
+        '''List the contents of the directory'''
+        entries = []
+        n = self._dir_entry_count()
+        for i in range(n):
+            name, di = self._dir_read_entry(i)
+            if name != '':
+                entries.append((name, di))
+        return entries
 
     #--- Helper Methods ---#
 
@@ -219,6 +399,14 @@ class FS:
         data = name + struct.pack(INT_FMT, di)
         self._write_file_by_desc(0, off, data)
 
+    def _dir_find(self, name: str) -> int:
+        n = self._dir_entry_count()
+        for i in range(n):
+            nm, di = self._dir_read_entry(i)
+            if nm == name:
+                return di
+        return -1
+
     def _dir_add(self, name: str, di: int):
         '''Add a directory entry'''
         packed_name = self._pack_name(name)
@@ -309,3 +497,41 @@ class FS:
 
         self._write_desc(desc, size, blocks[0], blocks[1], blocks[2])
 
+    #OFT helper methods
+
+    def _flush_oft(self, i: int):
+        '''Flush the buffer of an OFT entry to disk'''
+        if not self.OFT[i]['not_flushed']:
+            return
+        di = self.OFT[i]['desc']
+        _, ptrs = self._get_block_ptrs(di)
+        lbi = self.OFT[i]['cur']
+        if lbi == -1:
+            self.OFT[i]['dirty'] = False
+            return
+
+        disk_block = ptrs[lbi]
+        if disk_block == -1:
+            disk_block = self._alloc_block()
+            ptrs[lbi] = disk_block
+            size, _ = self._get_block_ptrs(di)
+            self._write_desc(di, size, ptrs[0], ptrs[1], ptrs[2])
+
+        self.O[:] = self.OFT[i]['buf'][:]
+        self.disk.write_block(disk_block, self.O)
+        self.OFT[i]['dirty'] = False
+
+    def _load_oft_block(self, i: int, block_index: int):
+        '''Load a block into the OFT entry buffer'''
+        self._flush_oft_entry(i)
+
+        di = self.OFT[i]['desc']
+        _, ptrs = self._get_block_ptrs(di)
+
+        self.OFT[i]['buf'][:] = b'\x00' * BLOCK_SIZE
+        self.OFT[i]['cur'] = block_index
+        self.OFT[i]['dirty'] = False
+
+        disk_block = ptrs[block_index]
+        if disk_block == -1:
+            self.disk.read_block(disk_block, self.OFT[i]['buf'])
