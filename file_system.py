@@ -52,6 +52,7 @@ class FS:
             })
 
     def init(self):
+        '''Re-initialize the file system'''
         self.disk = EmulatedDisk(self.b)
         self.format_fs()
 
@@ -127,8 +128,21 @@ class FS:
         '''Read a descriptor from disk'''
         block, offset = self._desc_loc(i)
         self.disk.read_block(block, self.I)
-        desc = {
-            'length': self._get_int(self.I, offset),
-            'ptrs': [self._get_int(self.I, offset + 4 + j * INT_SIZE) for j in range(POINTERS)]
-        }
-        return desc
+        size = self._get_int(self.I, offset + 0)
+        b0 = self._get_int(self.I, offset + 4)
+        b1 = self._get_int(self.I, offset + 8)
+        b2 = self._get_int(self.I, offset + 12)
+        return size, b0, b1, b2
+
+    def _write_desc(self, i: int, size: int, b0: int, b1: int, b2: int):
+        '''Write a descriptor to disk'''
+        block, offset = self._desc_loc(i)
+        self.disk.read_block(block, self.I)
+        self.O[:] = self.I[:]
+        self._set_int(self.O, offset + 0, size)
+        self._set_int(self.O, offset + 4, b0)
+        self._set_int(self.O, offset + 8, b1)
+        self._set_int(self.O, offset + 12, b2)
+        self.disk.write_block(block, self.O)
+
+    
