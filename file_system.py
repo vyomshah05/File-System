@@ -243,4 +243,69 @@ class FS:
                 return
         raise ValueError("File not found")
 
+    # File read/write helper methods
+
+    def _get_block_ptr(self, desc: int) -> tuple[int, list[int]]:
+        '''Get the block pointers from a descriptor'''
+        size, b0, b1, b2 = self._read_desc(desc)
+        return size, [b0, b1, b2]
     
+    def _read_file_from_desc(self, desc: int, off: int, n: int) -> bytes:
+        '''Read data from a file given its descriptor index'''
+        size, blocks = self._get_block_ptr(desc)
+        if off >= size:
+            return b''
+        n = min(n, size - off)
+
+        out = bytearray()
+        while n > 0:
+            block_index = off // BLOCK_SIZE
+            block_offset = off % BLOCK_SIZE
+            block_num = blocks[block_index] if block_index < POINTERS else -1
+
+            if block_index >= 3:
+                break
+            if block_num == -1:
+                break
+
+            self.disk.read_block(block_num, self.I)
+            to_read = min(n, BLOCK_SIZE - block_offset)
+            out += self.I[block_offset:block_offset + to_read]
+
+            off += to_read
+            n -= to_read
+        
+        return bytes(out)
+    
+    def _write_file_by_desc(self, desc: int, off: int, data: bytes):
+        '''Write data to a file given its descriptor index'''
+        size, blocks = self._get_block_ptr(desc)
+        n = len(data)
+        data_offset = 0
+
+        while n > 0:
+            block_index = off // BLOCK_SIZE
+            block_offset = off % BLOCK_SIZE
+
+            if block_index >= 3:
+                raise RuntimeError("File size limit exceeded")
+
+            if blocks[block_index] == -1:
+                blocks[block_index] = self._alloc_block()
+                self._write_desc(desc, size, *blocks)
+
+            block_num = blocks[block_index]
+            self.disk.read_block(block_num, self.I)
+            self.O[:] = self.I[:]
+
+            to_write = min(n, BLOCK_SIZE - block_offset)
+            self.O[block_offset:block_offset + to_write] = data[data_offset:data_offset + to_write]
+            self.disk.write_block(block_num, self.O)
+
+            off += to_write
+            data_offset += to_write
+            n -= to_write
+            size = max(size, off)
+
+        self._write_desc(desc, size, blocks[0], blocks[1], blocks[2])
+
