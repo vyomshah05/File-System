@@ -10,17 +10,17 @@ POINTERS = 3
 
 class EmulatedDisk:
     def __init__(self, B: int):
-        self.B = B
+        self.b = B
         self.D = [bytearray(BLOCK_SIZE) for i in range(B)]
 
     def read_block(self, b: int, I: bytearray):
-        if 0 <= b < self.B:
+        if 0 <= b < self.b:
             I[:] = bytes(self.D[b])
         else:
             print('Block out of bounds')
         
     def write_block(self, b: int, O: bytearray):
-        if 0 <= b < self.B:
+        if 0 <= b < self.b:
             self.D[b][:] = O
         else:
             print('Block out of bounds')
@@ -30,6 +30,7 @@ class FS:
         self.block_size = BLOCK_SIZE
         self.b = B
         self.N = N
+        self.d = d 
 
         self.k = (self.d + DESCRIPTOR_PER_BLOCK - 1) // DESCRIPTOR_PER_BLOCK + 1
 
@@ -50,58 +51,8 @@ class FS:
                 'buf_i': -1,
                 'not_flushed': False
             })
-        
+        print(len(self.OFT))
         self.init()
-    
-    #--- File System Methods ---#
-
-    def init(self):
-        '''Re-initialize the file system'''
-        self.disk = EmulatedDisk(self.b)
-        self.format_fs()
-
-        #Reset buffers
-        self.I[:] = b'\x00' * BLOCK_SIZE
-        self.O[:] = b'\x00' * BLOCK_SIZE
-        self.M[:] = b'\x00' * BLOCK_SIZE
-
-        #Reset OFT
-        self.OFT = []
-        for i in range(self.N):
-            self.OFT[i]['buf'][:] = b'\x00' * BLOCK_SIZE
-            self.OFT[i]['pos'] = -1
-            self.OFT[i]['len'] = 0
-            self.OFT[i]['buf_i'] = -1
-            self.OFT[i]['not_flushed'] = False
-            self.OFT[i]['desc'] = -1
-
-        #Reset bitmap
-        for b in range(0, self.k + 1):
-            self._bitmap_set(b, 1)
-        for b in range(self.k + 1, self.B):
-            self._bitmap_set(b, 0)
-
-        #Initialize descriptors
-        for i in range(self.d):
-            self._write_desc(i, -1, -1, -1, -1)
-
-        #Set directory descriptor
-        self._write_desc(0, 0, self.k, -1, -1)
-
-        #Zero directory block
-        self.O[:] = b'\x00' * BLOCK_SIZE
-        self.disk.write_block(self.k, self.O)
-
-        #Open directory in OFT[0]
-        self.OFT[0]['desc'] = 0
-        self.OFT[0]['pos'] = 0
-        self.OFT[0]['len'] = 0
-        self.OFT[0]['buf_i'] = 0
-        self.OFT[0]['not_flushed'] = False
-
-        #Load directory block into OFT[0] buffer
-        self.disk.read_block(self.k, self.OFT[0]['buf'])
-        self.OFT[0]['buf'][:] = self.I[:]
 
     def format_fs(self):
         '''Format the file system'''
@@ -109,6 +60,8 @@ class FS:
         zero_block = bytearray(BLOCK_SIZE)
         for b in range(self.b):
             self.disk.write_block(b, zero_block)
+
+    #--- File System Methods ---#
 
     def create(self, name: str):
         '''Create a new file with the given name'''
@@ -288,6 +241,107 @@ class FS:
             if name != '':
                 entries.append((name, di))
         return entries
+    
+    #--- Auxiliary Methods ---#
+
+    def init(self):
+        '''Re-initialize the file system'''
+        self.disk = EmulatedDisk(self.b)
+        self.format_fs()
+
+        #Reset buffers
+        self.I[:] = b'\x00' * BLOCK_SIZE
+        self.O[:] = b'\x00' * BLOCK_SIZE
+        self.M[:] = b'\x00' * BLOCK_SIZE
+
+        #Reset OFT
+        for i in range(self.N):
+            self.OFT[i]['buf'][:] = b'\x00' * BLOCK_SIZE
+            self.OFT[i]['pos'] = -1
+            self.OFT[i]['len'] = 0
+            self.OFT[i]['buf_i'] = -1
+            self.OFT[i]['not_flushed'] = False
+            self.OFT[i]['desc'] = -1
+
+        #Reset bitmap
+        for b in range(0, self.k + 1):
+            self._bitmap_set(b, 1)
+        for b in range(self.k + 1, self.b):
+            self._bitmap_set(b, 0)
+
+        #Initialize descriptors
+        for i in range(self.d):
+            self._write_desc(i, -1, -1, -1, -1)
+
+        #Set directory descriptor
+        self._write_desc(0, 0, self.k, -1, -1)
+
+        #Zero directory block
+        self.O[:] = b'\x00' * BLOCK_SIZE
+        self.disk.write_block(self.k, self.O)
+
+        #Open directory in OFT[0]
+        self.OFT[0]['desc'] = 0
+        self.OFT[0]['pos'] = 0
+        self.OFT[0]['len'] = 0
+        self.OFT[0]['buf_i'] = 0
+        self.OFT[0]['not_flushed'] = False
+
+        #Load directory block into OFT[0] buffer
+        self.disk.read_block(self.k, self.OFT[0]['buf'])
+        self.OFT[0]['buf'][:] = self.I[:]
+
+    def write_memory(self, m: int, s: str):
+        '''Write a string to memory starting at address m'''
+        b = s.encode('ascii')
+
+        self.M[m:m+len(b)] = b
+
+    def read_memory(self, m: int, n: int) -> str:
+        '''Read n bytes from memory starting at address m'''
+        if m < 0 or m + n > BLOCK_SIZE:
+            raise IndexError("Memory read out of bounds")
+        return bytes(self.M[m:m+n])
+
+    def save(self, filename: str):
+        '''Save the current state of the file system to disk'''
+        with open(filename, "wb") as f:
+            for b in range(self.b):
+                f.write(self.disk.D[b])
+
+    def restore(self, filename: str):
+        '''Restore the file system state from disk'''
+        with open(filename, "rb") as f:
+            raw = f.read()
+
+        if len(raw) != self.b * BLOCK_SIZE:
+            raise RuntimeError("bad disk image size")
+        
+        for b in range(self.b):
+            start = b * BLOCK_SIZE
+            self.disk.D[b][:] = raw[b * BLOCK_SIZE:(b + 1) * BLOCK_SIZE]
+
+        self.I[:] = b'\x00' * BLOCK_SIZE
+        self.O[:] = b'\x00' * BLOCK_SIZE
+        self.M[:] = b'\x00' * BLOCK_SIZE
+
+        for i in range(self.N):
+            self.OFT[i]['buf'][:] = b'\x00' * BLOCK_SIZE
+            self.OFT[i]['pos'] = -1
+            self.OFT[i]['len'] = 0
+            self.OFT[i]['buf_i'] = -1
+            self.OFT[i]['not_flushed'] = False
+            self.OFT[i]['desc'] = -1
+
+        dir_size , b0, _, _ = self._read_desc(0)
+        self.OFT[0]['desc'] = 0
+        self.OFT[0]['pos'] = 0
+        self.OFT[0]['len'] = dir_size
+        self.OFT[0]['buf_i'] = 0
+        self.OFT[0]['not_flushed'] = False
+        if b0 != -1:
+            self.disk.read_block(b0, self.I)
+            self.OFT[0]['buf'][:] = self.I[:]
 
     #--- Helper Methods ---#
 
@@ -322,7 +376,7 @@ class FS:
 
     def _alloc_block(self) -> int:
         '''Allocate a free block from the bitmap'''
-        for b in range(self.k + 1, self.B):
+        for b in range(self.k + 1, self.b):
             if self._bitmap_get(b) == 0:
                 self._bitmap_set(b, 1)
                 self.O[:] = b'\x00' * BLOCK_SIZE
@@ -389,8 +443,9 @@ class FS:
             raise IndexError("Directory entry index out of bounds")
 
         off = i * 8
-        name = self._unpack_name(self._read_file_by_desc(0, off, 8)[0:4])
-        di = struct.unpack(INT_FMT, self._read_file_by_desc(0, off, 8))[0]
+        data = self._read_file_from_desc(0, off, 8)
+        name = self._unpack_name(data[0:4])
+        di = struct.unpack(INT_FMT, data[4:8])[0]
         return name, di
     
     def _dir_write_entry(self, i: int, name: bytes, di: int):
@@ -504,17 +559,17 @@ class FS:
         if not self.OFT[i]['not_flushed']:
             return
         di = self.OFT[i]['desc']
-        _, ptrs = self._get_block_ptrs(di)
-        lbi = self.OFT[i]['cur']
+        _, ptrs = self._get_block_ptr(di)
+        lbi = self.OFT[i]['buf_i']
         if lbi == -1:
-            self.OFT[i]['dirty'] = False
+            self.OFT[i]['not_flushed'] = False
             return
 
         disk_block = ptrs[lbi]
         if disk_block == -1:
             disk_block = self._alloc_block()
             ptrs[lbi] = disk_block
-            size, _ = self._get_block_ptrs(di)
+            size, _ = self._get_block_ptr(di)
             self._write_desc(di, size, ptrs[0], ptrs[1], ptrs[2])
 
         self.O[:] = self.OFT[i]['buf'][:]
@@ -526,12 +581,70 @@ class FS:
         self._flush_oft_entry(i)
 
         di = self.OFT[i]['desc']
-        _, ptrs = self._get_block_ptrs(di)
+        _, ptrs = self._get_block_ptr(di)
 
         self.OFT[i]['buf'][:] = b'\x00' * BLOCK_SIZE
-        self.OFT[i]['cur'] = block_index
-        self.OFT[i]['dirty'] = False
+        self.OFT[i]['buf_i'] = block_index
+        self.OFT[i]['not_flushed'] = False
 
         disk_block = ptrs[block_index]
         if disk_block == -1:
             self.disk.read_block(disk_block, self.OFT[i]['buf'])
+
+    # -- Debugging Methods -- #
+
+    def __str__(self) -> str:
+        lines = []
+        lines.append("====== FILE SYSTEM STATE ======")
+
+        lines.append("Directory:")
+        try:
+            n = self._dir_entry_count()
+            if n == 0:
+                lines.append("  (empty)")
+            else:
+                for i in range(n):
+                    name, di = self._dir_read_entry(i)
+                    if name:
+                        size, b0, b1, b2 = self._read_desc(di)
+                        lines.append(f"  {name:4s} -> desc {di:3d}, size={size}")
+        except Exception as e:
+            lines.append(f"  [directory error: {e}]")
+
+        lines.append("\nOpen File Table (OFT):")
+        for i, e in enumerate(self.OFT):
+            if e['pos'] == -1:
+                lines.append(f"  [{i}] FREE")
+            else:
+                lines.append(
+                    f"  [{i}] desc={e['desc']:3d} "
+                    f"pos={e['pos']:4d} size={e['len']:4d} "
+                    f"cur_blk={e['buf_i']} dirty={e['not_flushed']}"
+                )
+
+        lines.append("\nDescriptors (in use):")
+        any_used = False
+        for di in range(self.d):
+            size, b0, b1, b2 = self._read_desc(di)
+            if size != -1:
+                any_used = True
+                lines.append(
+                    f"  [{di:3d}] size={size:4d} "
+                    f"blocks=[{b0},{b1},{b2}]"
+                )
+        if not any_used:
+            lines.append("  (none)")
+
+        used = []
+        for b in range(self.B):
+            if self._bitmap_get(b):
+                used.append(b)
+
+        lines.append("\nBitmap (allocated blocks):")
+        if used:
+            lines.append("  " + ", ".join(map(str, used)))
+        else:
+            lines.append("  (none)")
+
+        lines.append("====== END FILE SYSTEM STATE ======")
+        return "\n".join(lines)
