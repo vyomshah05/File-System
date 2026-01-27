@@ -56,6 +56,7 @@ class Shell:
                     print("position set")
 
                 elif cmd == "dr":
+                    print('---------------', self.fs.directory(), '---------------')
                     for name, size in self.fs.directory():
                         print(name, size)
 

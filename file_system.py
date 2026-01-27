@@ -136,12 +136,18 @@ class FS:
             raise RuntimeError("OFT entry not in use")
         
         self._flush_oft(i)
+
+        di = self.OFT[i]['desc']
+        final_len = self.OFT[i]['len']
+        _, b0, b1, b2 = self._read_desc(di)
+        self._write_desc(di, final_len, b0, b1, b2)
+
         self.OFT[i]['desc'] = -1
         self.OFT[i]['pos'] = -1
         self.OFT[i]['len'] = 0
         self.OFT[i]['buf_i'] = -1
         self.OFT[i]['not_flushed'] = False
-        self.OFT[i]['cur'] = -1
+        self.OFT[i]['buf_i'] = -1
 
     def read(self, i: int, m: int, n: int) -> bytes:
         '''Read n bytes from the file associated with the given OFT index'''
@@ -156,7 +162,7 @@ class FS:
         if off >= size:
             return 0
         
-        m = min(n, size - off)
+        n = min(n, size - off)
         read_count = 0
 
         while n > 0:
@@ -174,7 +180,7 @@ class FS:
             n -= to_read
             read_count += to_read
 
-        self.OFT[i]['pos'] += off
+        self.OFT[i]['pos'] = off
         return read_count
     
     def write(self, i: int, m: int, n: int):
@@ -211,9 +217,9 @@ class FS:
             off += to_write
             n -= to_write
             written_count += to_write
-            self.OFT[i]['len'] = max(self.OFT[i]['len'], self.OFT[i]['pos'])
+            self.OFT[i]['len'] = max(self.OFT[i]['len'], off)
 
-        self.OFT[i]['pos'] += off
+        self.OFT[i]['pos'] = off
         return written_count
     
     def seek(self, i: int, pos: int):
@@ -236,10 +242,11 @@ class FS:
         '''List the contents of the directory'''
         entries = []
         n = self._dir_entry_count()
+        print('N:', n)
         for i in range(n):
             name, di = self._dir_read_entry(i)
-            if name != '':
-                entries.append((name, di))
+            size, b0, b1, b2 = self._read_desc(di)
+            entries.append((name, size))
         return entries
     
     #--- Auxiliary Methods ---#
@@ -289,7 +296,6 @@ class FS:
 
         #Load directory block into OFT[0] buffer
         self.disk.read_block(self.k, self.OFT[0]['buf'])
-        self.OFT[0]['buf'][:] = self.I[:]
 
     def write_memory(self, m: int, s: str):
         '''Write a string to memory starting at address m'''
@@ -574,11 +580,11 @@ class FS:
 
         self.O[:] = self.OFT[i]['buf'][:]
         self.disk.write_block(disk_block, self.O)
-        self.OFT[i]['dirty'] = False
+        self.OFT[i]['not_flushed'] = False
 
     def _load_oft_block(self, i: int, block_index: int):
         '''Load a block into the OFT entry buffer'''
-        self._flush_oft_entry(i)
+        self._flush_oft(i)
 
         di = self.OFT[i]['desc']
         _, ptrs = self._get_block_ptr(di)
@@ -588,8 +594,10 @@ class FS:
         self.OFT[i]['not_flushed'] = False
 
         disk_block = ptrs[block_index]
-        if disk_block == -1:
+        if disk_block != -1:
             self.disk.read_block(disk_block, self.OFT[i]['buf'])
+        else:
+            self.OFT[i]['buf'][:] = b'\x00' * BLOCK_SIZE
 
     # -- Debugging Methods -- #
 
@@ -636,7 +644,7 @@ class FS:
             lines.append("  (none)")
 
         used = []
-        for b in range(self.B):
+        for b in range(self.b):
             if self._bitmap_get(b):
                 used.append(b)
 
