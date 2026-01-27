@@ -17,13 +17,13 @@ class EmulatedDisk:
         if 0 <= b < self.b:
             I[:] = bytes(self.D[b])
         else:
-            print('Block out of bounds')
+            raise ValueError('Block out of bounds')
         
     def write_block(self, b: int, O: bytearray):
         if 0 <= b < self.b:
             self.D[b][:] = O
         else:
-            print('Block out of bounds')
+            raise ValueError('Block out of bounds')
 
 class FS:
     def __init__(self, B: int = 64, d: int = 192, N: int = 4):
@@ -242,7 +242,6 @@ class FS:
         '''List the contents of the directory'''
         entries = []
         n = self._dir_entry_count()
-        print('N:', n)
         for i in range(n):
             name, di = self._dir_read_entry(i)
             size, b0, b1, b2 = self._read_desc(di)
@@ -564,18 +563,22 @@ class FS:
         '''Flush the buffer of an OFT entry to disk'''
         if not self.OFT[i]['not_flushed']:
             return
+        
         di = self.OFT[i]['desc']
-        _, ptrs = self._get_block_ptr(di)
+        if di == -1:
+            self.OFT[i]['not_flushed'] = False
+            return
         lbi = self.OFT[i]['buf_i']
         if lbi == -1:
             self.OFT[i]['not_flushed'] = False
             return
+        
+        size, ptrs = self._get_block_ptr(di)
 
         disk_block = ptrs[lbi]
         if disk_block == -1:
             disk_block = self._alloc_block()
             ptrs[lbi] = disk_block
-            size, _ = self._get_block_ptr(di)
             self._write_desc(di, size, ptrs[0], ptrs[1], ptrs[2])
 
         self.O[:] = self.OFT[i]['buf'][:]
@@ -584,12 +587,17 @@ class FS:
 
     def _load_oft_block(self, i: int, block_index: int):
         '''Load a block into the OFT entry buffer'''
+        if block_index < 0 or block_index >= 3:
+            raise ValueError("block_index out of range (must be 0..2)")
+        
+        if self.OFT[i]['buf_i'] == block_index:
+            return
+    
         self._flush_oft(i)
 
         di = self.OFT[i]['desc']
         _, ptrs = self._get_block_ptr(di)
 
-        self.OFT[i]['buf'][:] = b'\x00' * BLOCK_SIZE
         self.OFT[i]['buf_i'] = block_index
         self.OFT[i]['not_flushed'] = False
 

@@ -71,7 +71,7 @@ class Shell:
 
                 elif cmd == "rm":
                     m = int(parts[1]); n = int(parts[2])
-                    self.fs.read_memory(m, n)
+                    print(self.fs.read_memory(m, n))
 
                 elif cmd == "sv":
                     self.fs.save(parts[1])
@@ -83,6 +83,6 @@ class Shell:
 
                 else:
                     print("unknown command")
-                print('fs:', self.fs)
+                #print('fs:', self.fs)
             except Exception as e:
                 raise e
