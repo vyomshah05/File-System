@@ -51,7 +51,6 @@ class FS:
                 'buf_i': -1,
                 'not_flushed': False
             })
-        print(len(self.OFT))
         self.init()
 
     def format_fs(self):
@@ -244,6 +243,13 @@ class FS:
         n = self._dir_entry_count()
         for i in range(n):
             name, di = self._dir_read_entry(i)
+
+            if name == "" or di == -1:
+                continue
+
+            if di <= 0 or di >= self.d:
+                continue
+            
             size, b0, b1, b2 = self._read_desc(di)
             entries.append((name, size))
         return entries

@@ -7,7 +7,7 @@ class Shell:
     def run(self):
         while True:
             try:
-                line = input("fs> ").strip()
+                line = input("$ ").strip()
             except EOFError:
                 break
             if not line:
@@ -58,6 +58,7 @@ class Shell:
                 elif cmd == "dr":
                     for name, size in self.fs.directory():
                         print(name, size, end = ' ')
+                    print()
                     
 
                 elif cmd == "wm":
@@ -71,7 +72,7 @@ class Shell:
 
                 elif cmd == "rm":
                     m = int(parts[1]); n = int(parts[2])
-                    print(self.fs.read_memory(m, n))
+                    print(self.fs.read_memory(m, n).decode('ASCII'))
 
                 elif cmd == "sv":
                     self.fs.save(parts[1])
@@ -84,5 +85,5 @@ class Shell:
                 else:
                     print("unknown command")
             except Exception as e:
-                #print("error")
-                raise e
+                print("error")
+                #raise e
