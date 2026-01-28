@@ -301,6 +301,7 @@ class FS:
         b = s.encode('ascii')
 
         self.M[m:m+len(b)] = b
+        return len(b)
 
     def read_memory(self, m: int, n: int) -> str:
         '''Read n bytes from memory starting at address m'''
