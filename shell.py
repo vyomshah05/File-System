@@ -48,7 +48,7 @@ class Shell:
                 elif cmd == "wr":
                     h = int(parts[1]); m = int(parts[2]); n = int(parts[3])
                     w = self.fs.write(h, m, n)
-                    print(w, "bytes written to file", h)
+                    print(w, "bytes written to", h)
 
                 elif cmd == "sk":
                     h = int(parts[1]); pos = int(parts[2])
