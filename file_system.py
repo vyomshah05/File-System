@@ -48,8 +48,7 @@ class FS:
                 'pos': -1,
                 'len': 0,
                 'buf': bytearray(BLOCK_SIZE),
-                'buf_i': -1,
-                'not_flushed': False
+                'buf_i': -1
             })
         self.init()
 
@@ -115,7 +114,6 @@ class FS:
                 size, b0, b1, b2 = self._read_desc(di)
                 self.OFT[i]['len'] = size
                 self.OFT[i]['buf_i'] = 0
-                self.OFT[i]['not_flushed'] = False
 
                 block_num = b0 if b0 != -1 else -1
                 if block_num != -1:
@@ -134,8 +132,6 @@ class FS:
         if self.OFT[i]['pos'] == -1:
             raise RuntimeError("OFT entry not in use")
         
-        self._flush_oft(i)
-
         di = self.OFT[i]['desc']
         final_len = self.OFT[i]['len']
         _, b0, b1, b2 = self._read_desc(di)
@@ -144,8 +140,6 @@ class FS:
         self.OFT[i]['desc'] = -1
         self.OFT[i]['pos'] = -1
         self.OFT[i]['len'] = 0
-        self.OFT[i]['buf_i'] = -1
-        self.OFT[i]['not_flushed'] = False
         self.OFT[i]['buf_i'] = -1
 
     def read(self, i: int, m: int, n: int) -> bytes:
@@ -210,13 +204,21 @@ class FS:
 
             to_write = min(n, BLOCK_SIZE - block_offset)
             self.OFT[i]['buf'][block_offset:block_offset + to_write] = self.M[m:m + to_write]
-            self.OFT[i]['not_flushed'] = True
+            
+            # Write buffer to disk immediately
+            disk_block = ptrs[block_index]
+            self.O[:] = self.OFT[i]['buf'][:]
+            self.disk.write_block(disk_block, self.O)
 
             m += to_write
             off += to_write
             n -= to_write
             written_count += to_write
             self.OFT[i]['len'] = max(self.OFT[i]['len'], off)
+            
+            # Update descriptor size immediately when writing
+            _, b0, b1, b2 = self._read_desc(di)
+            self._write_desc(di, self.OFT[i]['len'], b0, b1, b2)
 
         self.OFT[i]['pos'] = off
         return written_count
@@ -249,7 +251,7 @@ class FS:
 
             if di <= 0 or di >= self.d:
                 continue
-            
+
             size, b0, b1, b2 = self._read_desc(di)
             entries.append((name, size))
         return entries
@@ -272,7 +274,6 @@ class FS:
             self.OFT[i]['pos'] = -1
             self.OFT[i]['len'] = 0
             self.OFT[i]['buf_i'] = -1
-            self.OFT[i]['not_flushed'] = False
             self.OFT[i]['desc'] = -1
 
         #Reset bitmap
@@ -297,7 +298,6 @@ class FS:
         self.OFT[0]['pos'] = 0
         self.OFT[0]['len'] = 0
         self.OFT[0]['buf_i'] = 0
-        self.OFT[0]['not_flushed'] = False
 
         #Load directory block into OFT[0] buffer
         self.disk.read_block(self.k, self.OFT[0]['buf'])
@@ -342,7 +342,6 @@ class FS:
             self.OFT[i]['pos'] = -1
             self.OFT[i]['len'] = 0
             self.OFT[i]['buf_i'] = -1
-            self.OFT[i]['not_flushed'] = False
             self.OFT[i]['desc'] = -1
 
         dir_size , b0, _, _ = self._read_desc(0)
@@ -350,7 +349,6 @@ class FS:
         self.OFT[0]['pos'] = 0
         self.OFT[0]['len'] = dir_size
         self.OFT[0]['buf_i'] = 0
-        self.OFT[0]['not_flushed'] = False
         if b0 != -1:
             self.disk.read_block(b0, self.I)
             self.OFT[0]['buf'][:] = self.I[:]
@@ -566,31 +564,7 @@ class FS:
 
     #OFT helper methods
 
-    def _flush_oft(self, i: int):
-        '''Flush the buffer of an OFT entry to disk'''
-        if not self.OFT[i]['not_flushed']:
-            return
-        
-        di = self.OFT[i]['desc']
-        if di == -1:
-            self.OFT[i]['not_flushed'] = False
-            return
-        lbi = self.OFT[i]['buf_i']
-        if lbi == -1:
-            self.OFT[i]['not_flushed'] = False
-            return
-        
-        size, ptrs = self._get_block_ptr(di)
 
-        disk_block = ptrs[lbi]
-        if disk_block == -1:
-            disk_block = self._alloc_block()
-            ptrs[lbi] = disk_block
-            self._write_desc(di, size, ptrs[0], ptrs[1], ptrs[2])
-
-        self.O[:] = self.OFT[i]['buf'][:]
-        self.disk.write_block(disk_block, self.O)
-        self.OFT[i]['not_flushed'] = False
 
     def _load_oft_block(self, i: int, block_index: int):
         '''Load a block into the OFT entry buffer'''
@@ -600,13 +574,10 @@ class FS:
         if self.OFT[i]['buf_i'] == block_index:
             return
     
-        self._flush_oft(i)
-
         di = self.OFT[i]['desc']
         _, ptrs = self._get_block_ptr(di)
 
         self.OFT[i]['buf_i'] = block_index
-        self.OFT[i]['not_flushed'] = False
 
         disk_block = ptrs[block_index]
         if disk_block != -1:
@@ -642,7 +613,7 @@ class FS:
                 lines.append(
                     f"  [{i}] desc={e['desc']:3d} "
                     f"pos={e['pos']:4d} size={e['len']:4d} "
-                    f"cur_blk={e['buf_i']} dirty={e['not_flushed']}"
+                    f"cur_blk={e['buf_i']}"
                 )
 
         lines.append("\nDescriptors (in use):")
