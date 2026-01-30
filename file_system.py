@@ -104,6 +104,8 @@ class FS:
             raise ValueError("File not found")
         
         for i in range(1, self.N):
+            if self.OFT[i]['desc'] == di and self.OFT[i]['pos'] != -1:
+                raise RuntimeError("file already open")
             if self.OFT[i]['pos'] != -1 and self.OFT[i]['desc'] == di:
                 return i
         
@@ -187,11 +189,16 @@ class FS:
         off = self.OFT[i]['pos']
         written_count = 0
 
+        #MAX_FILE_SIZE = 3 * BLOCK_SIZE
+        #if self.OFT[i]['pos'] + n > MAX_FILE_SIZE:
+        #    raise RuntimeError("file size limit exceeded")
+        
         while n > 0:
             block_index = off // BLOCK_SIZE
             block_offset = off % BLOCK_SIZE
 
             if block_index >= 3:
+                break
                 raise RuntimeError("File size limit exceeded")
 
             if self.OFT[i]['buf_i'] != block_index:
@@ -564,8 +571,6 @@ class FS:
 
     #OFT helper methods
 
-
-
     def _load_oft_block(self, i: int, block_index: int):
         '''Load a block into the OFT entry buffer'''
         if block_index < 0 or block_index >= 3:
@@ -584,61 +589,3 @@ class FS:
             self.disk.read_block(disk_block, self.OFT[i]['buf'])
         else:
             self.OFT[i]['buf'][:] = b'\x00' * BLOCK_SIZE
-
-    # -- Debugging Methods -- #
-
-    def __str__(self) -> str:
-        lines = []
-        lines.append("====== FILE SYSTEM STATE ======")
-
-        lines.append("Directory:")
-        try:
-            n = self._dir_entry_count()
-            if n == 0:
-                lines.append("  (empty)")
-            else:
-                for i in range(n):
-                    name, di = self._dir_read_entry(i)
-                    if name:
-                        size, b0, b1, b2 = self._read_desc(di)
-                        lines.append(f"  {name:4s} -> desc {di:3d}, size={size}")
-        except Exception as e:
-            lines.append(f"  [directory error: {e}]")
-
-        lines.append("\nOpen File Table (OFT):")
-        for i, e in enumerate(self.OFT):
-            if e['pos'] == -1:
-                lines.append(f"  [{i}] FREE")
-            else:
-                lines.append(
-                    f"  [{i}] desc={e['desc']:3d} "
-                    f"pos={e['pos']:4d} size={e['len']:4d} "
-                    f"cur_blk={e['buf_i']}"
-                )
-
-        lines.append("\nDescriptors (in use):")
-        any_used = False
-        for di in range(self.d):
-            size, b0, b1, b2 = self._read_desc(di)
-            if size != -1:
-                any_used = True
-                lines.append(
-                    f"  [{di:3d}] size={size:4d} "
-                    f"blocks=[{b0},{b1},{b2}]"
-                )
-        if not any_used:
-            lines.append("  (none)")
-
-        used = []
-        for b in range(self.b):
-            if self._bitmap_get(b):
-                used.append(b)
-
-        lines.append("\nBitmap (allocated blocks):")
-        if used:
-            lines.append("  " + ", ".join(map(str, used)))
-        else:
-            lines.append("  (none)")
-
-        lines.append("====== END FILE SYSTEM STATE ======")
-        return "\n".join(lines)

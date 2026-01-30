@@ -6,4 +6,8 @@ if __name__ == "__main__":
     N = 4
 
     shell = Shell(B=B, d=d, N=N)
-    shell.run()
+    input_file = "FS-input-1.txt"
+
+    with open(input_file, "r") as f:
+        lines = f.readlines()
+    shell.run(lines)
